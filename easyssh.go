@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/ScaleFT/sshkeys"
+	"github.com/haochen233/socks5"
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/agent"
 )
@@ -59,6 +60,7 @@ type (
 
 	// DefaultConfig for ssh proxy config
 	DefaultConfig struct {
+		Type         string // socks5/socks4/ssh, default ssh
 		User         string
 		Server       string
 		Key          string
@@ -204,7 +206,7 @@ func (ssh_conf *MakeConfig) Connect() (*ssh.Session, *ssh.Client, error) {
 	}
 
 	// Enable proxy command
-	if ssh_conf.Proxy.Server != "" {
+	if ssh_conf.Proxy.Server != "" && (ssh_conf.Proxy.Type == "" || ssh_conf.Proxy.Type == "ssh") {
 		proxyConfig, closer := getSSHConfig(DefaultConfig{
 			User:              ssh_conf.Proxy.User,
 			Key:               ssh_conf.Proxy.Key,
@@ -236,6 +238,27 @@ func (ssh_conf *MakeConfig) Connect() (*ssh.Session, *ssh.Client, error) {
 			return nil, nil, err
 		}
 
+		client = ssh.NewClient(ncc, chans, reqs)
+	} else if ssh_conf.Proxy.Server != "" && ssh_conf.Proxy.Type != "" && (ssh_conf.Proxy.Type == "socks5") {
+		clnt := socks5.Client{
+			ProxyAddr: fmt.Sprintf("%s:%s", ssh_conf.Proxy.Server, ssh_conf.Proxy.Port),
+			// Authenticator supported by the client.
+			// It must not be nil.
+			Auth: map[socks5.METHOD]socks5.Authenticator{
+				socks5.USERNAME_PASSWORD: &socks5.UserPasswd{Username: ssh_conf.Proxy.User, Password: ssh_conf.Proxy.Password},
+			},
+		}
+
+		// client send CONNECT command and get a tcp connection.
+		// and use this connection transit data between you and www.google.com:80.
+		conn, err := clnt.Connect(socks5.Version5, fmt.Sprintf("%s:%s", ssh_conf.Server, ssh_conf.Port))
+		if err != nil {
+			return nil, nil, err
+		}
+		ncc, chans, reqs, err := ssh.NewClientConn(conn, net.JoinHostPort(ssh_conf.Server, ssh_conf.Port), targetConfig)
+		if err != nil {
+			return nil, nil, err
+		}
 		client = ssh.NewClient(ncc, chans, reqs)
 	} else {
 		client, err = ssh.Dial("tcp", net.JoinHostPort(ssh_conf.Server, ssh_conf.Port), targetConfig)
